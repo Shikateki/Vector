@@ -3,7 +3,7 @@ name: Core
 on:
   workflow_dispatch:
   push:
-    branches: [ master ]
+    branches: [ master, api102-harness ]
     tags: [ v* ]
   pull_request:
   merge_group:
@@ -74,8 +74,6 @@ jobs:
             echo "No signing secret on this fork; building unsigned."
             exit 0
           fi
-          # Through the environment rather than interpolated into the script: a password holding a
-          # quote would otherwise be pasted into a shell word and mangled, or worse, executed.
           {
             echo "androidStorePassword=$KEY_STORE_PASSWORD"
             echo "androidKeyAlias=$ALIAS"
@@ -148,9 +146,6 @@ jobs:
           name: ${{ steps.prepareArtifact.outputs.zygiskDebugName }}
           path: "./Vector-Debug/*"
 
-      # One entry per module that minifies. `app` was the old manager and has not existed since
-      # #796, so the manager's mapping — the one an obfuscated stack trace from a user actually
-      # needs — has been missing from every run since.
       - name: Upload mappings
         uses: actions/upload-artifact@v7
         with:
@@ -160,8 +155,6 @@ jobs:
             manager/build/outputs/mapping
             daemon/build/outputs/mapping
 
-      # DEBUG_SYMBOLS_PATH is set from `layout.buildDirectory` inside the root `subprojects` block,
-      # so each module writes its own build/symbols and nothing ever lands in the root one.
       - name: Upload symbols
         uses: actions/upload-artifact@v7
         with:
@@ -171,17 +164,6 @@ jobs:
             daemon/build/symbols
             dex2oat/build/symbols
 
-      # --- stable release --------------------------------------------------------------------
-      #
-      # A pushed `v*` tag is a stable release, not a canary. It is published here from the same
-      # signed zips this build produced, so cutting a release is `git tag && git push` with nothing
-      # hand-uploaded afterwards — the hand-assembly is exactly how v2.0's assets came to disagree
-      # with zygisk/update.json (#811), and an automated attach cannot drift from what was built.
-      #
-      # Marked `--latest`, unlike the canaries below: this is what `releases/latest`, and therefore
-      # the manager's update check, resolves to. The body is the module's own zygisk/changelog.md
-      # under a GitHub H1 the release page shows. The changelog itself carries no title line — the
-      # manager renders it beneath its own heading, so a banner there would only read twice.
       - name: Publish release
         if: ${{ success() && github.ref_type == 'tag' && startsWith(github.ref_name, 'v') }}
         env:
@@ -189,11 +171,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          # `%s` arguments, never the format string, so a `%` anywhere in the changelog is literal.
           notes=$(printf '# 🎉 Vector %s 🎉\n\n%s\n' "${TAG#v}" "$(cat zygisk/changelog.md)")
-
-          # Recreated rather than edited so a re-run replaces the assets instead of appending a
-          # second copy. No `--cleanup-tag`: the release is rebuilt, the pushed release tag is kept.
           gh release delete "$TAG" --yes 2>/dev/null || true
           gh release create "$TAG" \
             --latest \
@@ -202,16 +180,6 @@ jobs:
             zygisk/release/Vector-v*-Release.zip \
             zygisk/release/Vector-v*-Debug.zip
 
-      # --- canary distribution ---------------------------------------------------------------
-      #
-      # The zips above are also attached to a prerelease, because an Actions artifact cannot be
-      # downloaded without a GitHub account — `GET /actions/artifacts/<id>/zip` answers 401 to an
-      # anonymous caller, while a release asset answers 206. Testing a canary is the lowest-friction
-      # way for an ordinary user to help, so it must not require handing an OAuth grant to anyone,
-      # and it must work for the many users who cannot reach GitHub's login page at all.
-      #
-      # Marked prerelease so `releases/latest` — which is what update checks read — keeps pointing
-      # at the last stable tag.
       - name: Publish canary prerelease
         if: >-
           success() &&
@@ -228,7 +196,6 @@ jobs:
           tag="canary-${VERSION_CODE}"
           subject=$(git log -1 --pretty=%s)
           short=$(git rev-parse --short HEAD)
-
           notes=$(cat <<EOF
           **${subject}**
 
@@ -246,9 +213,6 @@ jobs:
           Only the five most recent canaries are kept.
           EOF
           )
-
-          # Recreated rather than edited: re-running the workflow for the same commit should
-          # replace that build, not append a second copy of every asset to it.
           gh release delete "$tag" --yes --cleanup-tag 2>/dev/null || true
           gh release create "$tag" \
             --prerelease \
@@ -258,9 +222,6 @@ jobs:
             zygisk/release/Vector-v*-Release.zip \
             zygisk/release/Vector-v*-Debug.zip
 
-      # Five is what a tester needs: enough to bisect a regression across a few days, few enough
-      # that the releases page is still mostly releases. Sorted by version code, which is the commit
-      # count and therefore monotonic, rather than by date, which reruns and reverts can disorder.
       - name: Keep only the five most recent canaries
         if: >-
           success() &&
@@ -270,8 +231,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # `grep` exits 1 when nothing matches, which under `pipefail` would fail the step on a
-          # repository that has no canaries yet. Collected first, then acted on.
           tags=$(gh release list --limit 100 --json tagName --jq '.[].tagName' | grep '^canary-' || true)
           [ -n "$tags" ] || exit 0
           echo "$tags" | sort -t- -k2 -n -r | tail -n +6 | while read -r old; do
