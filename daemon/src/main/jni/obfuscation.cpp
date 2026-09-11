@@ -197,6 +197,13 @@ Java_org_matrix_vector_daemon_utils_ObfuscationManager_obfuscateDex(JNIEnv *env,
                                                                     jobject memory) {
     ensureInitialized(env);
 
+#if __ANDROID_API__ < 27
+    // android.os.SharedMemory and ASharedMemory_dupFromJava() were introduced
+    // in API 27. The rest of the native daemon can still be built for API 26,
+    // but this SharedMemory-based obfuscation path is unavailable there.
+    LOGE("DEX obfuscation via SharedMemory is unavailable on API < 27");
+    return nullptr;
+#else
     int fd = ASharedMemory_dupFromJava(env, memory);
     if (fd < 0) return nullptr;
 
@@ -263,4 +270,5 @@ Java_org_matrix_vector_daemon_utils_ObfuscationManager_obfuscateDex(JNIEnv *env,
         lsplant::JNI_NewObject(env, class_shared_memory, method_shared_memory_ctor, java_fd);
 
     return java_sm.release();
+#endif
 }
